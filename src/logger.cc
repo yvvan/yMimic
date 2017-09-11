@@ -112,27 +112,54 @@ Logger::Logger() {
   this_ptr_ = this;
 }
 
-static std::chrono::time_point<std::chrono::system_clock> kLastTime;
+enum class MouseAction {
+  Undefined = 0,
+  LeftDown,
+  LeftUp,
+  RightDown,
+  RightUp,
+  MiddleDown,
+  MiddleUp,
+  Wheel
+};
 
-static void handleKeyPress(int code, int key_value) {
+static float getTimeDiff() {
+  static std::chrono::time_point<std::chrono::system_clock> kLastTime;
+
   std::chrono::time_point<std::chrono::system_clock> cur_time;
   cur_time = std::chrono::system_clock::now();
-  std::chrono::duration<double> elapsed_seconds = cur_time - kLastTime;
+  std::chrono::duration<float> elapsed_seconds = cur_time - kLastTime;
   kLastTime = cur_time;
+  return elapsed_seconds.count();
+}
 
+static void handleKeyPress(int code, const std::string& direction) {
   auto* logger = Logger::Instance();
   //assert(logger);
   std::lock_guard<std::mutex> lock(logger->GetMutex());
   auto& logfile = logger->logfile();
   logfile << "key ";
+  // TODO: convert to char/special symbol representation
   logfile << code << " ";
-  if (key_value == 1) {
-    logfile << "down";
-  } else if (key_value == 0) {
-    logfile << "up";
-  } else if (key_value == 2) {
-    logfile << "rep";
-  }
+  logfile << direction << ", time = ";
+  logfile << getTimeDiff() << "\n";
+}
+
+struct Point {
+  int x;
+  int y;
+};
+
+static void handleMouseAction(MouseAction action, Point pt, int value = 0) {
+  auto* logger = Logger::Instance();
+  //assert(logger);
+  std::lock_guard<std::mutex> lock(logger->GetMutex());
+  auto& logfile = logger->logfile();
+  logfile << "key ";
+  // TODO: convert to char/special symbol representation
+  logfile << static_cast<int>(action) << ", pt: ";
+  logfile << pt.x << ", " << pt.y << ", time = ";
+  logfile << getTimeDiff() << "\n";
 }
 
 //void ReadThread::run() {
@@ -294,11 +321,32 @@ std::fstream& Logger::logfile() {
 #ifdef Q_OS_WIN32
 static HHOOK kMouseHook, kKeyboardHook;
 static LRESULT CALLBACK ProcessMouse(int code, WPARAM w_param, LPARAM l_param) {
-  MOUSEHOOKSTRUCT* mouse = (MOUSEHOOKSTRUCT *)l_param;
+  MSLLHOOKSTRUCT* mouse = (MSLLHOOKSTRUCT *)l_param;
   if (mouse) {
-    if(w_param == WM_LBUTTONDOWN) {
-      std::cout << "left mouse pressed" << std::endl;
-    }
+    POINT win_pt = mouse->pt;
+    Point pt {win_pt.x, win_pt.y};
+    MouseAction action = MouseAction::Undefined;
+    int value;
+    switch (w_param) {
+    default:
+      return CallNextHookEx(kMouseHook, code, w_param, l_param);
+    case WM_LBUTTONDOWN:
+      action = MouseAction::LeftDown;
+    case WM_LBUTTONUP:
+      action = MouseAction::LeftUp;
+    case WM_RBUTTONDOWN:
+      action = MouseAction::RightDown;
+    case WM_RBUTTONUP:
+      action = MouseAction::RightUp;
+    case WM_MBUTTONDOWN:
+      action = MouseAction::MiddleDown;
+    case WM_MBUTTONUP:
+      action = MouseAction::MiddleUp;
+    case WM_MOUSEHWHEEL:
+      action = MouseAction::Wheel;
+      value = HIWORD(mouse->mouseData);
+    };
+    handleMouseAction(action, pt, value);
   }
   return CallNextHookEx(kMouseHook, code, w_param, l_param);
 }
@@ -306,8 +354,11 @@ static LRESULT CALLBACK ProcessMouse(int code, WPARAM w_param, LPARAM l_param) {
 static LRESULT CALLBACK ProcessKeyboard(int code, WPARAM w_param, LPARAM l_param) {
   KBDLLHOOKSTRUCT* keyboard = (KBDLLHOOKSTRUCT *)l_param;
   if (keyboard) {
+    // TODO: get kbd modifiers
     if(w_param == WM_KEYDOWN) {
-      std::cout << "key is down" << std::endl;
+      handleKeyPress(keyboard->vkCode, "down");
+    } else if (w_param == WM_KEYUP) {
+      handleKeyPress(keyboard->vkCode, "up");
     }
   }
   return CallNextHookEx(kKeyboardHook, code, w_param, l_param);
